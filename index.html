@@ -1,1 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Data Viz — GitHub Pages Starter</title>
+  <meta name="description" content="Drop-in, zero-build template for hosting an interactive chart on GitHub Pages. Supports CSV via ?data= URL or local data.csv." />
+  
+  <!-- Plotly for interactive charts -->
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <!-- Papa Parse for CSV parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  
+  <style>
+    :root { --bg:#0b0c10; --panel:#111217; --text:#e6e6e6; --muted:#a8acb3; --accent:#7aa2f7; }
+    html,body { height:100%; }
+    body {
+      margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      background: linear-gradient(180deg, #0b0c10 0%, #0e1116 100%);
+      color:var(--text);
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 2rem 1rem 4rem; }
+    header { display:flex; gap:1rem; align-items:center; justify-content:space-between; margin-bottom:1rem; }
+    h1 { font-size: clamp(1.25rem, 2.5vw, 1.6rem); margin:0; letter-spacing: .2px; }
+    .card { background: var(--panel); border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    .controls { display:grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap:.75rem; padding:1rem; border-bottom: 1px solid #23242a; }
+    .controls .full { grid-column: 1 / -1; }
+    label { font-size:.8rem; color:var(--muted); display:block; margin-bottom:.35rem; }
+    select, input[type="text"], input[type="url"], button {
+      width:100%; padding:.6rem .7rem; border-radius:10px; border:1px solid #2a2c36; background:#0c0e13; color:var(--text);
+    }
+    select[multiple]{ height:9.5rem; }
+    button.primary { background: linear-gradient(135deg, #4858ff, #7aa2f7); border:none; font-weight:600; cursor:pointer; }
+    button.ghost { background:#0c0e13; cursor:pointer; }
+    #chart { height: 64vh; width: 100%; }
+    .foot { display:flex; align-items:center; justify-content:space-between; padding:.75rem 1rem; border-top:1px solid #23242a; color:var(--muted); font-size:.85rem; }
+    .pill { padding:.2rem .5rem; border-radius:999px; background:#0c0e13; border:1px solid #2a2c36; }
+    .hint { color: var(--muted); font-size:.8rem; }
+    @media (max-width: 900px){ .controls { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Interactive Data Viz</h1>
+      <div style="display:flex; gap:.5rem;">
+        <button id="copyLink" class="ghost" title="Copy shareable link">Copy share link</button>
+        <a id="rawLink" class="ghost pill" href="#" target="_blank" style="text-decoration:none; color:inherit; display:none;">Open data.csv</a>
+      </div>
+    </header>
 
+    <div class="card">
+      <div class="controls">
+        <div class="full">
+          <label for="dataUrl">CSV source (optional)</label>
+          <input id="dataUrl" type="url" placeholder="Paste a CSV URL (or leave empty to use ./data.csv)" />
+          <div class="hint">Tip: host a <code>data.csv</code> in this repo (or use a Google Sheets "Publish to web" CSV link). Append <code>?data=&lt;url&gt;</code> to share a preloaded dataset.</div>
+        </div>
+
+        <div>
+          <label for="chartType">Chart type</label>
+          <select id="chartType">
+            <option value="line">Line</option>
+            <option value="bar">Bar</option>
+            <option value="scatter">Scatter</option>
+          </select>
+        </div>
+
+        <div>
+          <label for="xCol">X column</label>
+          <select id="xCol"></select>
+        </div>
+
+        <div>
+          <label for="yCols">Y column(s)</label>
+          <select id="yCols" multiple></select>
+        </div>
+
+        <div>
+          <label for="groupCol">Group / Series (optional)</label>
+          <select id="groupCol"></select>
+        </div>
+
+        <div>
+          <label for="title">Title</label>
+          <input id="title" type="text" placeholder="Chart title" />
+        </div>
+
+        <div>
+          <label>&nbsp;</label>
+          <button id="render" class="primary">Render chart</button>
+        </div>
+
+        <div>
+          <label>&nbsp;</label>
+          <button id="downloadPNG" class="ghost">Download PNG</button>
+        </div>
+
+        <div>
+          <label for="fileInput">Or load a local CSV</label>
+          <input id="fileInput" type="file" accept=".csv" />
+        </div>
+      </div>
+
+      <div id="chart"></div>
+      <div class="foot">
+        <span id="status">Ready.</span>
+        <span><span class="pill" id="rows">0 rows</span> <span class="pill" id="cols">0 cols</span></span>
+      </div>
+    </div>
+
+    <p class="hint" style="margin-top:.75rem;">Made with Plotly + PapaParse. Template by <em>you</em> ✨ — customise freely.</p>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const qs = new URLSearchParams(location.search);
+
+    let parsed = { data: [], meta: { fields: [] } };
+
+    const sampleCSV = `date,category,value
+2025-01-01,A,10
+2025-02-01,A,14
+2025-03-01,A,9
+2025-01-01,B,7
+2025-02-01,B,11
+2025-03-01,B,13`;
+
+    function setStatus(msg){ $("status").textContent = msg; }
+
+    function populateControls(fields){
+      const opts = fields.map(f => `<option value="${f}">${f}</option>`).join("");
+      $("xCol").innerHTML = opts;
+      $("yCols").innerHTML = opts;
+      $("groupCol").innerHTML = `<option value="">(none)</option>` + opts;
+    }
+
+    function isDateLike(v){
+      // detect ISO-ish date
+      return /\d{4}-\d{2}-\d{2}/.test(v);
+    }
+
+    function autoGuessColumns(){
+      const fields = parsed.meta.fields || [];
+      if(!fields.length) return;
+      // guess x: first date-like or first column
+      const firstRow = parsed.data[0] || {};
+      let xGuess = fields.find(f => isDateLike(firstRow[f])) || fields[0];
+      let yGuess = fields.find(f => f !== xGuess);
+      $("xCol").value = xGuess || fields[0];
+      $("yCols").value = yGuess || fields[1] || fields[0];
+    }
+
+    function toTraces(rows, x, yCols, group){
+      // If group provided, build one trace per group per y
+      const traces = [];
+      if(group){
+        const groups = [...new Set(rows.map(r => r[group]))];
+        for(const g of groups){
+          const subset = rows.filter(r => r[group] == g);
+          for(const y of yCols){
+            traces.push({
+              x: subset.map(r => r[x]),
+              y: subset.map(r => num(r[y])),
+              type: $("chartType").value,
+              name: `${g} — ${y}`
+            });
+          }
+        }
+      } else {
+        for(const y of yCols){
+          traces.push({ x: rows.map(r => r[x]), y: rows.map(r => num(r[y])), type: $("chartType").value, name: y });
+        }
+      }
+      return traces;
+    }
+
+    function num(v){ const n = Number(v); return isNaN(n) ? null : n; }
+
+    async function render(){
+      const x = $("xCol").value;
+      const ySel = [...$("yCols").selectedOptions].map(o => o.value);
+      const group = $("groupCol").value || null;
+      if(!x || !ySel.length){ setStatus("Pick at least one X and one Y"); return; }
+
+      const rows = parsed.data.map(r => ({...r}));
+
+      // try to coerce date-like X to Date for better axis formatting
+      if(rows.length && isDateLike(rows[0][x])){
+        for(const r of rows){ r[x] = new Date(r[x]); }
+      }
+
+      const traces = toTraces(rows, x, ySel, group);
+
+      const layout = {
+        title: $("title").value || "",
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        margin: { t: 50, r: 20, b: 60, l: 60 },
+        xaxis: { gridcolor: '#22252c' },
+        yaxis: { gridcolor: '#22252c' },
+        legend: { bgcolor: 'rgba(0,0,0,0)' }
+      };
+
+      Plotly.newPlot('chart', traces, layout, {displaylogo:false, responsive:true});
+      setStatus(`Rendered ${traces.length} trace${traces.length>1?'s':''}.`);
+    }
+
+    function loadCSVFromString(csv){
+      parsed = Papa.parse(csv, { header:true, dynamicTyping:false });
+      const fields = parsed.meta.fields || [];
+      populateControls(fields);
+      $("rows").textContent = `${parsed.data.length} rows`;
+      $("cols").textContent = `${fields.length} cols`;
+      autoGuessColumns();
+      setStatus("CSV loaded.");
+    }
+
+    async function fetchCSV(url){
+      setStatus("Fetching CSV…");
+      try{
+        const res = await fetch(url, { mode: 'cors' });
+        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        loadCSVFromString(text);
+        $("rawLink").style.display = 'inline-block';
+        $("rawLink").href = url;
+        $("rawLink").textContent = 'Open CSV';
+      }catch(e){
+        console.warn('CSV fetch failed, using sample.', e);
+        setStatus(`Couldn't fetch CSV (${e.message}). Using sample.`);
+        loadCSVFromString(sampleCSV);
+      }
+    }
+
+    $("render").addEventListener('click', render);
+
+    $("downloadPNG").addEventListener('click', async () => {
+      try{ await Plotly.downloadImage('chart', {format:'png', filename:'chart'}); }
+      catch{ alert('Render a chart first.'); }
+    });
+
+    $("fileInput").addEventListener('change', (e)=>{
+      const f = e.target.files?.[0];
+      if(!f) return;
+      const fr = new FileReader();
+      fr.onload = () => loadCSVFromString(fr.result);
+      fr.readAsText(f);
+    });
+
+    $("copyLink").addEventListener('click', async () => {
+      const url = new URL(location.href);
+      const src = $("dataUrl").value.trim();
+      if(src) url.searchParams.set('data', src); else url.searchParams.delete('data');
+      try { await navigator.clipboard.writeText(url.toString()); setStatus('Link copied to clipboard.'); }
+      catch { setStatus('Unable to copy link.'); }
+    });
+
+    $("dataUrl").addEventListener('change', ()=>{
+      const url = $("dataUrl").value.trim();
+      if(url) fetchCSV(url);
+    });
+
+    // Boot: if ?data= present use it, else try ./data.csv, else sample
+    (async function init(){
+      const paramURL = qs.get('data');
+      if(paramURL){
+        $("dataUrl").value = paramURL;
+        fetchCSV(paramURL);
+      } else {
+        try {
+          await fetchCSV('data.csv');
+        } catch {
+          loadCSVFromString(sampleCSV);
+        }
+      }
+    })();
+  </script>
+</body>
+</html>
